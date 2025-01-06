@@ -1,0 +1,10 @@
+---
+Language: Cpp
+Standard: Cpp11
+BasedOnStyle: Microsoft
+AlwaysBreakTemplateDeclarations: true
+FixNamespaceComments: false
+TabWidth: 4
+UseTab: Never
+ColumnLimit: 0
+PackConstructorInitializers: NextLine
