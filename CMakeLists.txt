@@ -27,6 +27,9 @@ add_executable(udp_camera
 ament_target_dependencies(udp_camera ${ament_libraries})
 target_link_libraries(udp_camera JPEG::JPEG)
 
+install(TARGETS udp_camera
+  DESTINATION lib/${PROJECT_NAME})
+
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
   set(ament_cmake_copyright_FOUND TRUE)
