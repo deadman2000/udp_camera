@@ -61,4 +61,9 @@ class BufferManager
             _idle.push(buff);
         _completed.clear();
     }
+
+    int completed_count() const
+    {
+        return _completed.size();
+    }
 };

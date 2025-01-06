@@ -1,17 +1,17 @@
+#include <cstdint>
 #include <cstring>
-#include <rclcpp/logger.hpp>
 #include <string>
 #include <thread>
+#include <vector>
 
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/opencv.hpp>
 
 #include <rclcpp/executors.hpp>
-#include <rclcpp/logging.hpp>
 #include <rclcpp/node.hpp>
 
 #include <image_transport/image_transport.hpp>
-#include <vector>
+#include <std_msgs/msg/byte.hpp>
 
 #include "buffer_manager.hpp"
 #include "safe_queue.hpp"
@@ -21,12 +21,17 @@ using namespace rclcpp;
 using namespace std::chrono_literals;
 using namespace std::placeholders;
 using namespace sensor_msgs::msg;
+using namespace std_msgs::msg;
 
 class UdpCameraNode : public Node
 {
     UdpServer _udp;
-    char _request_front[2] = {0x42, 0x76};
-    char _request_bottom[2] = {0x42, 0x79};
+
+    // ros2 topic pub -1 /udp_camera/cmd std_msgs/msg/Byte "{data: [0x79]}"
+    static constexpr uint8_t START_STREAM = 0x76;
+    static constexpr uint8_t STOP_STREAM = 0x77;
+    static constexpr uint8_t INVERSE_VERT = 0x78;
+    static constexpr uint8_t SELECT_CAMERA = 0x79;
 
     static constexpr int BUFF_SIZE = 1024 * 100;
     char _frame_buff[BUFF_SIZE];
@@ -37,9 +42,9 @@ class UdpCameraNode : public Node
     CameraInfo _ci;
     image_transport::CameraPublisher _img_pub;
     TimerBase::SharedPtr _request_timer;
+    Subscription<Byte>::SharedPtr _command_sub;
 
     bool _has_stream;
-    bool _select_front_camera;
 
     std::thread _thr_receive, _thr_decode;
 
@@ -47,15 +52,12 @@ class UdpCameraNode : public Node
     UdpCameraNode()
         : Node("udp_camera"),
           _udp(20000),
-          _has_stream(false),
-          _select_front_camera(true)
+          _has_stream(false)
     {
-        declare_parameter("front", true);
-        get_parameter("front", _select_front_camera);
         _img_pub = image_transport::create_camera_publisher(this, "/camera/image_raw");
 
         _request_timer = create_wall_timer(1s, bind(&UdpCameraNode::check_stream, this));
-        request_stream();
+        _command_sub = create_subscription<Byte>("~/cmd", SensorDataQoS(), bind(&UdpCameraNode::cmd_callback, this, _1));
 
         _thr_receive = std::thread(&UdpCameraNode::receive, this);
         _thr_decode = std::thread(&UdpCameraNode::decode, this);
@@ -69,27 +71,32 @@ class UdpCameraNode : public Node
             _thr_decode.join();
     }
 
+    void cmd_callback(const Byte &msg)
+    {
+        do_cmd(msg.data);
+    }
+
     void check_stream()
     {
         if (!_has_stream)
         {
             request_stream();
         }
+
         _has_stream = false;
     }
 
     void request_stream()
     {
-        if (_select_front_camera)
-        {
-            RCLCPP_INFO(get_logger(), "Request front");
-            _udp.send(_request_front, 2);
-        }
-        else
-        {
-            RCLCPP_INFO(get_logger(), "Request bottom");
-            _udp.send(_request_bottom, 2);
-        }
+        RCLCPP_INFO(get_logger(), "Request stream");
+        do_cmd(START_STREAM);
+    }
+
+    void do_cmd(uint8_t cmd)
+    {
+        RCLCPP_INFO(get_logger(), "Send cmd %02x", cmd);
+        uint8_t message[2] = {0x42, cmd};
+        _udp.send(reinterpret_cast<const char *>(message), sizeof(message));
     }
 
     void receive()
@@ -102,8 +109,8 @@ class UdpCameraNode : public Node
             auto buff = _buffer.get_buffer();
             if (!buff)
             {
-                RCLCPP_WARN(get_logger(), "No buffer %d", _decode_queue.size());
-                std::this_thread::sleep_for(10ms);
+                RCLCPP_WARN(get_logger(), "No buffer (completed: %d; decode queue: %d)", _buffer.completed_count(), _decode_queue.size());
+                _buffer.reset();
                 continue;
             }
 
